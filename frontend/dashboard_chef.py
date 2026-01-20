@@ -540,6 +540,7 @@ def update_exam_status(exam_id, new_status, user_id, commentaire=None):
     try:
         cursor = conn.cursor()
         
+        # Mettre à jour le statut de l'examen
         cursor.execute("""
             UPDATE examens 
             SET statut = %s, 
@@ -549,6 +550,15 @@ def update_exam_status(exam_id, new_status, user_id, commentaire=None):
         """, (new_status, user_id, exam_id))
         
         conn.commit()
+        
+        # Ajouter un message dans la session si l'examen est refusé
+        if new_status == 'REFUSE':
+            st.session_state['admin_alert'] = {
+                'type': 'exam_refused',
+                'exam_id': exam_id,
+                'user_id': user_id,
+                'message': f"Un examen (ID: {exam_id}) a été refusé par le chef de département. Veuillez regénérer le planning.",
+            }
         
         # Enregistrer l'action dans planning_generations
         cursor.execute("""

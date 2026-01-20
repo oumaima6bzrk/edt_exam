@@ -82,9 +82,28 @@ def show_dashboard():
     
 
 def show_overview():
-    """Vue d'ensemble des statistiques"""
-    st.header("📊 Vue d'ensemble du système")
     
+    st.header("📊 Vue d'ensemble du système")
+    conn = get_connection()
+    if conn:
+        cursor = conn.cursor(dictionary=True)
+        cursor.execute("""
+            SELECT COUNT(*) as nb_refused 
+            FROM examens 
+            WHERE statut = 'REFUSE'
+        """)
+        result = cursor.fetchone()
+        conn.close()
+        
+        if result and result['nb_refused'] > 0:
+            st.error(f"🚨 {result['nb_refused']} examen(s) refusé(s) par le chef de département")
+            
+            # Bouton pour voir les détails
+            if st.button("👀 Voir les examens refusés", key="view_refused_exams"):
+                st.session_state['show_refused_exams'] = True
+                st.rerun()
+            
+            st.divider()
     try:
         # Récupérer les données
         sessions = fetch_sessions()
