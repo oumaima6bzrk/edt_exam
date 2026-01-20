@@ -3,6 +3,7 @@ import streamlit as st
 import sys
 import os
 
+port = int(os.environ.get("PORT", 8501))
 # Ajouter le chemin du projet au PYTHONPATH
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
