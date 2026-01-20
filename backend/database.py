@@ -1,17 +1,28 @@
 import mysql.connector
 from mysql.connector import Error
 import hashlib  # Ajout de l'import pour le hachage
-
+import os 
 def get_connection():
     """Établir la connexion à la base de données"""
     try:
-        connection = mysql.connector.connect(
-            host="localhost",
-            user="root",
-            password="",  # Ton mot de passe XAMPP si nécessaire
-            database="edt_exam",
-            charset='utf8mb4'
-        )
+        # Pour la production (Render)
+        if os.environ.get('RENDER'):
+            connection = mysql.connector.connect(
+                host=os.environ.get('DB_HOST', 'localhost'),
+                user=os.environ.get('DB_USER', 'root'),
+                password=os.environ.get('DB_PASSWORD', ''),
+                database=os.environ.get('DB_NAME', 'edt_exam'),
+                charset='utf8mb4'
+            )
+        # Pour le développement local
+        else:
+            connection = mysql.connector.connect(
+                host="localhost",
+                user="root",
+                password="",
+                database="edt_exam",
+                charset='utf8mb4'
+            )
         return connection
     except Error as e:
         print(f"Erreur de connexion à MySQL: {e}")
