@@ -1,364 +1,216 @@
-
+# frontend/dashboard_chef.py
 import streamlit as st
-from backend.database import get_connection
+import pandas as pd
+from datetime import datetime
+import sys
+import os
+
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, project_root)
+
+try:
+    from backend.database import get_connection, fetch_formations, fetch_examens_by_session_grouped
+    DB_AVAILABLE = True
+except ImportError as e:
+    DB_AVAILABLE = False
+    st.warning(f"Backend non disponible: {e}")
 
 def show_chef_dashboard():
-    """Dashboard spécifique au Chef de Département"""
-    user = st.session_state.user
+    """Dashboard Chef de Département"""
     
     st.title("🏢 Tableau de Bord - Chef de Département")
     
     # Barre latérale
     with st.sidebar:
         st.image("https://cdn-icons-png.flaticon.com/512/3135/3135715.png", width=100)
-        st.write(f"**👤 {user.get('email', 'Utilisateur')}**")
-        st.write(f"**🎯 Rôle: Chef de Département**")
+        
+        if 'user' in st.session_state:
+            user = st.session_state.user
+            st.write(f"**👤 {user.get('email', 'Utilisateur')}**")
+            st.write(f"**🎯 Rôle: Chef de Département**")
+        
         st.divider()
         
         menu_option = st.radio(
-            "Menu",
-            ["📋 Validation Examens", "📊 Statistiques"]
+            "📋 Menu",
+            ["✅ Validation Examens", "📊 Statistiques Département", "⚠️ Gestion Conflits", "👤 Mon Profil"]
         )
         
         st.divider()
-        if st.button("🚪 Déconnexion"):
+        if st.button("🚪 Déconnexion", use_container_width=True):
             del st.session_state.user
             st.rerun()
     
     # Contenu principal
-    if menu_option == "📋 Validation Examens":
-        show_validation_section(user)
-    elif menu_option == "📊 Statistiques":
-        show_statistics_section(user)
+    if menu_option == "✅ Validation Examens":
+        show_validation_section()
+    elif menu_option == "📊 Statistiques Département":
+        show_statistics_section()
+    elif menu_option == "⚠️ Gestion Conflits":
+        show_conflicts_section()
+    elif menu_option == "👤 Mon Profil":
+        show_profile()
 
-def show_validation_section(user):
-    """Section de validation des examens par département avec tableau tabulaire"""
-    st.header("📋 Validation des Examens")
+def show_validation_section():
+    """Validation des examens par département"""
+    st.header("✅ Validation des Examens - Département")
     
-    conn = get_connection()
-    if not conn:
-        st.error("Impossible de se connecter à la base de données")
+    if not DB_AVAILABLE:
+        st.error("❌ Base de données non disponible")
         return
     
     try:
+        conn = get_connection()
         cursor = conn.cursor(dictionary=True)
         
-        # Récupérer le département du chef
-        email = user['email']
+        # Récupérer le département du chef (simulation)
+        # Dans une vraie application, récupérer depuis la table users
+        user_email = st.session_state.user.get('email', '')
         
-        # Chercher le département du chef dans la table users
+        # Déterminer le département basé sur l'email
+        if 'info' in user_email or 'admin' in user_email:
+            departement_id = 1  # Informatique
+        elif 'math' in user_email:
+            departement_id = 2  # Mathématiques
+        elif 'phy' in user_email:
+            departement_id = 3  # Physique
+        else:
+            departement_id = 1
+        
+        # Récupérer les formations du département
         cursor.execute("""
-            SELECT u.departement_id, d.nom as departement_nom
-            FROM users u
-            LEFT JOIN departements d ON u.departement_id = d.id
-            WHERE u.email = %s AND u.role = 'CHEF_DEPT'
-        """, (email,))
+            SELECT id, nom FROM formations 
+            WHERE departement_id = %s
+            ORDER BY nom
+        """, (departement_id,))
         
-        dept_info = cursor.fetchone()
+        formations = cursor.fetchall()
         
-        if not dept_info or not dept_info['departement_id']:
-            st.error("❌ Vous n'êtes pas associé à un département. Contactez l'administrateur.")
+        if not formations:
+            st.info("Aucune formation dans votre département")
             return
         
-        dept_id = dept_info['departement_id']
-        dept_nom = dept_info['departement_nom']
-        
-        st.info(f"👨‍💼 Chef du Département: **{dept_nom}**")
-        
-        # Filtrer par session
-        cursor.execute("""
-            SELECT DISTINCT s.id, s.nom, s.date_debut, s.date_fin
-            FROM sessions_examens s
-            JOIN examens e ON s.id = e.session_id
-            JOIN formations f ON e.formation_id = f.id
-            WHERE f.departement_id = %s
-            ORDER BY s.date_debut DESC
-        """, (dept_id,))
-        
-        sessions = cursor.fetchall()
-        
-        if not sessions:
-            st.info("📭 Aucune session d'examens pour votre département")
-            return
-        
-        # Sélectionner une session
-        session_options = {f"{s['nom']} ({s['date_debut']} au {s['date_fin']})": s['id'] for s in sessions}
-        selected_session_label = st.selectbox(
-            "Sélectionnez une session:",
-            list(session_options.keys())
+        # Sélectionner une formation
+        formation_options = {f['nom']: f['id'] for f in formations}
+        selected_formation = st.selectbox(
+            "Sélectionnez une formation:",
+            list(formation_options.keys())
         )
         
-        if not selected_session_label:
+        if not selected_formation:
             return
         
-        session_id = session_options[selected_session_label]
+        formation_id = formation_options[selected_formation]
         
-        # Afficher les filtres de statut
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            show_all = st.checkbox("Afficher tous", value=True)
-        with col2:
-            show_pending = st.checkbox("En attente", value=True)
-        with col3:
-            show_confirmed = st.checkbox("Confirmés", value=False)
-        
-        # Construire la requête selon les filtres
-        statut_conditions = []
-        if show_all or show_pending:
-            statut_conditions.append("'EN_ATTENTE'")
-        if show_all or show_confirmed:
-            statut_conditions.append("'CONFIRME'")
-        
-        if not statut_conditions:
-            st.warning("Sélectionnez au moins un statut à afficher")
-            return
-        
-        statut_list = ','.join(statut_conditions)
-        
-        # Récupérer les examens
-        query = f"""
-            SELECT e.*, 
-                   m.nom as module_nom, 
-                   f.nom as formation_nom,
-                   s.nom as salle_nom,
-                   g.nom as groupe_nom,
-                   g.effectif as groupe_effectif,
-                   se.nom as session_nom,
-                   u.email as professeur_email,
-                   e.date_examen,
-                   e.heure_debut,
-                   e.duree_minutes
+        # Récupérer les examens de la formation
+        cursor.execute("""
+            SELECT e.*, m.nom as module_nom, g.nom as groupe_nom,
+                   s.nom as salle_nom, se.nom as session_nom,
+                   se.date_debut, se.date_fin
             FROM examens e
             JOIN modules m ON e.module_id = m.id
-            JOIN formations f ON e.formation_id = f.id
             JOIN groupes g ON e.groupe_id = g.id
-            JOIN sessions_examens se ON e.session_id = se.id
+            JOIN sessions se ON e.session_id = se.id
             LEFT JOIN salles s ON e.salle_id = s.id
-            LEFT JOIN surveillances sv ON e.id = sv.examen_id
-            LEFT JOIN professeurs p ON sv.prof_id = p.id
-            LEFT JOIN users u ON p.user_id = u.id
-            WHERE e.session_id = %s
-            AND f.departement_id = %s
-            AND e.statut IN ({statut_list})
-            ORDER BY 
-                f.nom,
-                g.nom,
-                e.date_examen,
-                e.heure_debut
-        """
+            WHERE e.formation_id = %s
+            AND e.statut IN ('EN_ATTENTE', 'CONFIRME', 'REFUSE')
+            ORDER BY e.date_examen, e.heure_debut
+        """, (formation_id,))
         
-        cursor.execute(query, (session_id, dept_id))
         examens = cursor.fetchall()
         
         if not examens:
-            st.info("📭 Aucun examen correspondant aux critères sélectionnés")
+            st.info("Aucun examen à valider pour cette formation")
             return
         
-        # Afficher les statistiques
-        total_examens = len(examens)
-        examens_attente = len([e for e in examens if e['statut'] == 'EN_ATTENTE'])
-        examens_confirme = len([e for e in examens if e['statut'] == 'CONFIRME'])
-        
+        # Filtrer par statut
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total examens", total_examens)
+            show_pending = st.checkbox("En attente ⏳", value=True)
         with col2:
-            st.metric("En attente", examens_attente, 
-                     delta=f"{examens_attente}/{total_examens}")
+            show_confirmed = st.checkbox("Confirmés ✅", value=True)
         with col3:
-            st.metric("Confirmés", examens_confirme,
-                     delta=f"{examens_confirme}/{total_examens}")
+            show_refused = st.checkbox("Refusés ❌", value=False)
         
-        # Afficher le tableau des examens
-        st.subheader("📝 Tableau des Examens")
+        # Appliquer les filtres
+        filtered_exams = []
+        for exam in examens:
+            if show_pending and exam['statut'] == 'EN_ATTENTE':
+                filtered_exams.append(exam)
+            elif show_confirmed and exam['statut'] == 'CONFIRME':
+                filtered_exams.append(exam)
+            elif show_refused and exam['statut'] == 'REFUSE':
+                filtered_exams.append(exam)
         
-        # Préparer les données pour le tableau
-        import pandas as pd
+        # Afficher les statistiques
+        total = len(filtered_exams)
+        pending = len([e for e in filtered_exams if e['statut'] == 'EN_ATTENTE'])
+        confirmed = len([e for e in filtered_exams if e['statut'] == 'CONFIRME'])
+        refused = len([e for e in filtered_exams if e['statut'] == 'REFUSE'])
         
-        table_data = []
+        col_stat1, col_stat2, col_stat3, col_stat4 = st.columns(4)
+        with col_stat1:
+            st.metric("Total", total)
+        with col_stat2:
+            st.metric("⏳ En attente", pending)
+        with col_stat3:
+            st.metric("✅ Confirmés", confirmed)
+        with col_stat4:
+            st.metric("❌ Refusés", refused)
         
-        for examen in examens:
-            # Formater la date si elle existe
-            date_formatted = ""
-            if examen['date_examen']:
-                # Convertir en objet date puis formater
-                from datetime import datetime
-                if isinstance(examen['date_examen'], str):
-                    date_obj = datetime.strptime(examen['date_examen'], '%Y-%m-%d').date()
-                else:
-                    date_obj = examen['date_examen']
-                date_formatted = date_obj.strftime('%d/%m/%Y')
-            
-            # Formater l'heure si elle existe
-            heure_formatted = examen['heure_debut'] if examen['heure_debut'] else ""
-            
-            # Déterminer l'icône de statut
+        # Tableau des examens
+        st.subheader("📋 Liste des Examens")
+        
+        exam_data = []
+        for exam in filtered_exams:
+            # Icône de statut
             statut_icon = ""
-            if examen['statut'] == 'EN_ATTENTE':
+            if exam['statut'] == 'EN_ATTENTE':
                 statut_icon = "⏳"
-            elif examen['statut'] == 'CONFIRME':
+            elif exam['statut'] == 'CONFIRME':
                 statut_icon = "✅"
-            elif examen['statut'] == 'REFUSE':
+            elif exam['statut'] == 'REFUSE':
                 statut_icon = "❌"
             
-            table_data.append({
-                "Formation": examen['formation_nom'],
-                "Groupe": examen['groupe_nom'],
-                "Module": examen['module_nom'],
-                "Date": date_formatted,
-                "Heure": heure_formatted,
-                "Salle": examen['salle_nom'] or "Non assignée",
-                "Surveillant": examen['professeur_email'] or "Non assigné",
-                "Durée": f"{examen['duree_minutes']} min",
-                "Statut": f"{statut_icon} {examen['statut']}",
-                "ID": examen['id']  # Garder l'ID pour les actions
+            exam_data.append({
+                "Module": exam['module_nom'],
+                "Groupe": exam['groupe_nom'],
+                "Date": exam['date_examen'].strftime("%d/%m/%Y") if exam['date_examen'] else "N/A",
+                "Heure": str(exam['heure_debut'])[:5] if exam['heure_debut'] else "N/A",
+                "Salle": exam['salle_nom'] or "N/A",
+                "Session": exam['session_nom'],
+                "Statut": f"{statut_icon} {exam['statut']}",
+                "ID": exam['id']
             })
         
-        # Créer le DataFrame
-        df_examens = pd.DataFrame(table_data)
-        
-        # Afficher le tableau avec Streamlit
-        st.dataframe(
-            df_examens,
-            column_config={
-                "Formation": st.column_config.TextColumn("Formation", width="medium"),
-                "Groupe": st.column_config.TextColumn("Groupe", width="small"),
-                "Module": st.column_config.TextColumn("Module", width="large"),
-                "Date": st.column_config.TextColumn("Date", width="small"),
-                "Heure": st.column_config.TextColumn("Heure", width="small"),
-                "Salle": st.column_config.TextColumn("Salle", width="small"),
-                "Surveillant": st.column_config.TextColumn("Surveillant", width="medium"),
-                "Durée": st.column_config.TextColumn("Durée", width="small"),
-                "Statut": st.column_config.TextColumn("Statut", width="small"),
-                "ID": None  # Cacher l'ID
-            },
-            hide_index=True,
-            use_container_width=True
-        )
-        
-        # Options de validation
-        st.markdown("---")
-        st.subheader("✅ Actions de validation")
-        
-        # Filtrer les examens en attente
-        examens_en_attente = [e for e in examens if e['statut'] == 'EN_ATTENTE']
-        
-        if examens_en_attente:
-            # Information sur le nombre d'examens en attente
-            st.info(f"**{len(examens_en_attente)}** examen(s) en attente de validation")
-            
-            # Options de validation
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                validation_option = st.radio(
-                    "Choisir l'action:",
-                    ["Valider tous les examens en attente", "Refuser tous les examens en attente"]
-                )
-            
-            with col2:
-                # Option de filtrage par formation
-                formations_list = sorted(set([e['formation_nom'] for e in examens_en_attente]))
-                selected_formation = st.selectbox(
-                    "Appliquer à une formation spécifique (optionnel):",
-                    ["Toutes les formations"] + formations_list
-                )
-            
-            # Zone pour commentaire
-            commentaire = st.text_area(
-                "Commentaire (optionnel):",
-                placeholder="Ajouter un commentaire pour justifier la décision..."
+        if exam_data:
+            df_exams = pd.DataFrame(exam_data)
+            st.dataframe(
+                df_exams,
+                column_config={
+                    "ID": None  # Cacher l'ID
+                },
+                hide_index=True
             )
             
-            # Bouton d'exécution
-            action_type = "Valider" if "Valider" in validation_option else "Refuser"
-            new_status = 'CONFIRME' if "Valider" in validation_option else 'REFUSE'
-            button_color = "primary" if "Valider" in validation_option else "secondary"
+            # Actions de validation
+            st.subheader("🔧 Actions de Validation")
             
-            if st.button(
-                f"🚀 {action_type} tous les examens en attente",
-                type=button_color,
-                use_container_width=True,
-                key="execute_validation"
-            ):
-                # Filtrer les examens si une formation spécifique est sélectionnée
-                examens_to_process = examens_en_attente
-                if selected_formation != "Toutes les formations":
-                    examens_to_process = [e for e in examens_en_attente if e['formation_nom'] == selected_formation]
-                
-                # Exécuter la validation
-                with st.spinner(f"{action_type} en cours..."):
-                    success_count = 0
-                    
-                    for examen in examens_to_process:
-                        if update_exam_status(examen['id'], new_status, user['id'], commentaire):
-                            success_count += 1
-                    
-                    # Afficher le résultat
-                    scope = f"pour la formation '{selected_formation}'" if selected_formation != "Toutes les formations" else ""
-                    
-                    if success_count > 0:
-                        if new_status == 'CONFIRME':
-                            st.success(f"✅ {success_count} examens validés {scope} !")
-                        else:
-                            st.success(f"❌ {success_count} examens refusés {scope} !")
-                        
-                        st.balloons()
-                        
-                        # Attendre un peu puis recharger
-                        import time
-                        time.sleep(2)
+            col_action1, col_action2 = st.columns(2)
+            
+            with col_action1:
+                if pending > 0:
+                    if st.button("✅ Valider tous les examens en attente", type="primary"):
+                        update_exams_status(formation_id, 'CONFIRME')
+                        st.success(f"{pending} examens validés!")
                         st.rerun()
-                    else:
-                        st.error("❌ Aucun examen n'a pu être traité")
-        else:
-            st.success("🎉 Tous les examens sont déjà validés !")
-        
-        # Option pour annuler les confirmations
-        examens_confirme_list = [e for e in examens if e['statut'] == 'CONFIRME']
-        if examens_confirme_list:
-            st.markdown("---")
-            st.subheader("↩️ Annuler des confirmations")
             
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                # Option de filtrage par formation pour l'annulation
-                formations_confirme = sorted(set([e['formation_nom'] for e in examens_confirme_list]))
-                selected_formation_cancel = st.selectbox(
-                    "Formation pour annuler:",
-                    ["Toutes les formations"] + formations_confirme,
-                    key="cancel_select"
-                )
-            
-            with col2:
-                if st.button(
-                    "↩️ Remettre en attente",
-                    type="secondary",
-                    use_container_width=True,
-                    key="cancel_button"
-                ):
-                    # Filtrer les examens
-                    examens_to_cancel = examens_confirme_list
-                    if selected_formation_cancel != "Toutes les formations":
-                        examens_to_cancel = [e for e in examens_confirme_list if e['formation_nom'] == selected_formation_cancel]
-                    
-                    with st.spinner("Annulation en cours..."):
-                        canceled_count = 0
-                        
-                        for examen in examens_to_cancel:
-                            if update_exam_status(examen['id'], 'EN_ATTENTE', user['id'], "Annulation confirmation"):
-                                canceled_count += 1
-                        
-                        if canceled_count > 0:
-                            scope = f"pour la formation '{selected_formation_cancel}'" if selected_formation_cancel != "Toutes les formations" else ""
-                            st.info(f"↩️ {canceled_count} examens remis en attente {scope} !")
-                            
-                            import time
-                            time.sleep(2)
-                            st.rerun()
-                        else:
-                            st.error("❌ Aucun examen n'a pu être annulé")
+            with col_action2:
+                if confirmed > 0:
+                    if st.button("↩️ Remettre en attente", type="secondary"):
+                        update_exams_status(formation_id, 'EN_ATTENTE')
+                        st.info(f"{confirmed} examens remis en attente!")
+                        st.rerun()
         
         cursor.close()
         conn.close()
@@ -366,31 +218,37 @@ def show_validation_section(user):
     except Exception as e:
         st.error(f"Erreur: {str(e)}")
 
-def show_statistics_section(user):
-    """Section de statistiques du département"""
+def update_exams_status(formation_id, new_status):
+    """Mettre à jour le statut des examens"""
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            UPDATE examens 
+            SET statut = %s
+            WHERE formation_id = %s
+            AND statut != %s
+        """, (new_status, formation_id, new_status))
+        
+        conn.commit()
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        st.error(f"Erreur de mise à jour: {str(e)}")
+
+def show_statistics_section():
+    """Statistiques du département"""
     st.header("📊 Statistiques du Département")
     
-    conn = get_connection()
-    if not conn:
-        st.error("Impossible de se connecter à la base de données")
+    if not DB_AVAILABLE:
+        st.error("❌ Base de données non disponible")
         return
     
     try:
+        conn = get_connection()
         cursor = conn.cursor(dictionary=True)
-        
-        # Récupérer l'ID du département du chef
-        cursor.execute("""
-            SELECT departement_id FROM users 
-            WHERE email = %s AND role = 'CHEF_DEPT'
-        """, (user['email'],))
-        
-        dept_info = cursor.fetchone()
-        
-        if not dept_info or not dept_info['departement_id']:
-            st.error("Vous n'êtes pas associé à un département")
-            return
-        
-        dept_id = dept_info['departement_id']
         
         # Statistiques générales
         st.subheader("📈 Vue d'ensemble")
@@ -398,181 +256,206 @@ def show_statistics_section(user):
         col1, col2, col3, col4 = st.columns(4)
         
         with col1:
-            cursor.execute("""
-                SELECT COUNT(*) as total_formations
-                FROM formations f
-                WHERE f.departement_id = %s
-            """, (dept_id,))
-            total_formations = cursor.fetchone()['total_formations']
+            cursor.execute("SELECT COUNT(*) as total FROM formations")
+            total_formations = cursor.fetchone()['total']
             st.metric("Formations", total_formations)
         
         with col2:
-            cursor.execute("""
-                SELECT COUNT(*) as total_groupes
-                FROM groupes g
-                JOIN formations f ON g.formation_id = f.id
-                WHERE f.departement_id = %s
-            """, (dept_id,))
-            total_groupes = cursor.fetchone()['total_groupes']
+            cursor.execute("SELECT COUNT(*) as total FROM groupes")
+            total_groupes = cursor.fetchone()['total']
             st.metric("Groupes", total_groupes)
         
         with col3:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT e.id) as total_examens
-                FROM examens e
-                JOIN formations f ON e.formation_id = f.id
-                WHERE f.departement_id = %s
-            """, (dept_id,))
-            total_examens = cursor.fetchone()['total_examens']
-            st.metric("Examens totaux", total_examens)
+            cursor.execute("SELECT COUNT(*) as total FROM examens")
+            total_examens = cursor.fetchone()['total']
+            st.metric("Examens", total_examens)
         
         with col4:
-            cursor.execute("""
-                SELECT COUNT(DISTINCT p.id) as professeurs
-                FROM professeurs p
-                WHERE p.departement_id = %s
-            """, (dept_id,))
-            total_professeurs = cursor.fetchone()['professeurs']
-            st.metric("Professeurs", total_professeurs)
+            cursor.execute("SELECT COUNT(*) as total FROM professeurs")
+            total_profs = cursor.fetchone()['total']
+            st.metric("Professeurs", total_profs)
         
-        # Graphique des examens par statut
-        st.subheader("📊 Répartition des examens par statut")
+        # Distribution des examens par statut
+        st.subheader("📊 Distribution par Statut")
         
         cursor.execute("""
             SELECT 
-                e.statut,
-                COUNT(*) as nombre
-            FROM examens e
-            JOIN formations f ON e.formation_id = f.id
-            WHERE f.departement_id = %s
-            GROUP BY e.statut
-            ORDER BY 
-                CASE e.statut 
-                    WHEN 'EN_ATTENTE' THEN 1
-                    WHEN 'CONFIRME' THEN 2
-                    WHEN 'REFUSE' THEN 3
-                END
-        """, (dept_id,))
+                statut,
+                COUNT(*) as nombre,
+                ROUND(COUNT(*) * 100.0 / (SELECT COUNT(*) FROM examens), 1) as pourcentage
+            FROM examens
+            GROUP BY statut
+            ORDER BY nombre DESC
+        """)
         
-        stats_status = cursor.fetchall()
+        stats = cursor.fetchall()
         
-        if stats_status:
-            import pandas as pd
-            
-            df_status = pd.DataFrame(stats_status)
-            
-            # Mapper les statuts en français
-            status_labels = {
-                'EN_ATTENTE': 'En attente',
-                'CONFIRME': 'Confirmé',
-                'REFUSE': 'Refusé'
-            }
-            
-            df_status['statut_label'] = df_status['statut'].map(status_labels)
-            
-            # Afficher le graphique
-            st.bar_chart(df_status.set_index('statut_label')['nombre'])
+        if stats:
+            df_stats = pd.DataFrame(stats)
+            st.bar_chart(df_stats.set_index('statut')['nombre'])
             
             # Tableau détaillé
-            st.write("**Détail par statut:**")
-            for stat in stats_status:
-                status_text = status_labels.get(stat['statut'], stat['statut'])
-                percentage = (stat['nombre'] / total_examens * 100) if total_examens > 0 else 0
-                st.write(f"- {status_text}: {stat['nombre']} examens ({percentage:.1f}%)")
+            for stat in stats:
+                statut_text = ""
+                if stat['statut'] == 'EN_ATTENTE':
+                    statut_text = "⏳ En attente"
+                elif stat['statut'] == 'CONFIRME':
+                    statut_text = "✅ Confirmé"
+                elif stat['statut'] == 'REFUSE':
+                    statut_text = "❌ Refusé"
+                elif stat['statut'] == 'VALIDE':
+                    statut_text = "🏆 Validé"
+                else:
+                    statut_text = stat['statut']
+                
+                st.write(f"{statut_text}: {stat['nombre']} ({stat['pourcentage']}%)")
         
-        # Statistiques par formation
-        st.subheader("🎓 Examens par formation")
+        cursor.close()
+        conn.close()
+        
+    except Exception as e:
+        st.error(f"Erreur: {str(e)}")
+
+def show_conflicts_section():
+    """Gestion des conflits"""
+    st.header("⚠️ Gestion des Conflits")
+    
+    st.info("""
+    **Types de conflits détectés:**
+    1. **Conflit d'étudiant:** Même étudiant dans deux examens simultanés
+    2. **Conflit de professeur:** Même professeur surveillant deux examens simultanés
+    3. **Conflit de salle:** Même salle utilisée pour deux examens simultanés
+    4. **Salle trop petite:** Capacité insuffisante pour le groupe
+    """)
+    
+    if not DB_AVAILABLE:
+        st.error("❌ Base de données non disponible")
+        return
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor(dictionary=True)
+        
+        # Détecter les conflits de salle
+        st.subheader("🏫 Conflits de Salle")
         
         cursor.execute("""
             SELECT 
-                f.nom as formation,
-                COUNT(e.id) as total_examens,
-                SUM(CASE WHEN e.statut = 'CONFIRME' THEN 1 ELSE 0 END) as confirmes,
-                SUM(CASE WHEN e.statut = 'EN_ATTENTE' THEN 1 ELSE 0 END) as en_attente,
-                SUM(CASE WHEN e.statut = 'REFUSE' THEN 1 ELSE 0 END) as refuses
-            FROM formations f
-            LEFT JOIN examens e ON f.id = e.formation_id
-            WHERE f.departement_id = %s
-            GROUP BY f.id, f.nom
-            ORDER BY f.nom
-        """, (dept_id,))
+                e1.id as examen1_id,
+                e1.date_examen,
+                e1.heure_debut,
+                e1.salle_id,
+                s.nom as salle_nom,
+                m1.nom as module1,
+                m2.nom as module2,
+                e2.id as examen2_id
+            FROM examens e1
+            JOIN examens e2 ON e1.salle_id = e2.salle_id 
+                AND e1.id < e2.id
+                AND e1.date_examen = e2.date_examen
+                AND e1.heure_debut = e2.heure_debut
+            JOIN modules m1 ON e1.module_id = m1.id
+            JOIN modules m2 ON e2.module_id = m2.id
+            JOIN salles s ON e1.salle_id = s.id
+            WHERE e1.statut IN ('EN_ATTENTE', 'CONFIRME')
+            ORDER BY e1.date_examen, e1.heure_debut
+        """)
         
-        stats_formations = cursor.fetchall()
+        conflits_salle = cursor.fetchall()
         
-        if stats_formations:
-            import pandas as pd
+        if conflits_salle:
+            conflit_data = []
+            for conflit in conflits_salle:
+                conflit_data.append({
+                    "Salle": conflit['salle_nom'],
+                    "Date": conflit['date_examen'].strftime("%d/%m/%Y"),
+                    "Heure": str(conflit['heure_debut'])[:5],
+                    "Module 1": conflit['module1'],
+                    "Module 2": conflit['module2'],
+                    "Type": "Salle double utilisation"
+                })
             
-            df_formations = pd.DataFrame(stats_formations)
+            df_conflits = pd.DataFrame(conflit_data)
+            st.dataframe(df_conflits, hide_index=True)
+        else:
+            st.success("✅ Aucun conflit de salle détecté")
+        
+        # Conflits de capacité
+        st.subheader("👥 Conflits de Capacité")
+        
+        cursor.execute("""
+            SELECT 
+                e.id,
+                m.nom as module_nom,
+                g.nom as groupe_nom,
+                g.effectif,
+                s.nom as salle_nom,
+                s.capacite,
+                CASE 
+                    WHEN g.effectif > s.capacite THEN 'Dépassement'
+                    WHEN g.effectif > s.capacite * 0.9 THEN 'Proche limite'
+                    ELSE 'OK'
+                END as etat
+            FROM examens e
+            JOIN modules m ON e.module_id = m.id
+            JOIN groupes g ON e.groupe_id = g.id
+            LEFT JOIN salles s ON e.salle_id = s.id
+            WHERE e.statut IN ('EN_ATTENTE', 'CONFIRME')
+            AND s.id IS NOT NULL
+            ORDER BY (g.effectif - s.capacite) DESC
+        """)
+        
+        capacites = cursor.fetchall()
+        
+        if capacites:
+            cap_data = []
+            for cap in capacites:
+                if cap['effectif'] > cap['capacite']:
+                    cap_data.append({
+                        "Module": cap['module_nom'],
+                        "Groupe": cap['groupe_nom'],
+                        "Salle": cap['salle_nom'],
+                        "Effectif": cap['effectif'],
+                        "Capacité": cap['capacite'],
+                        "Déficit": cap['effectif'] - cap['capacite'],
+                        "État": "❌ Dépassement"
+                    })
             
-            # Calculer les pourcentages
-            for idx, row in df_formations.iterrows():
-                total = row['total_examens']
-                if total > 0:
-                    df_formations.loc[idx, 'confirme_pct'] = (row['confirmes'] / total * 100)
-                    df_formations.loc[idx, 'attente_pct'] = (row['en_attente'] / total * 100)
-                    df_formations.loc[idx, 'refuse_pct'] = (row['refuses'] / total * 100)
-            
-            # Afficher un tableau interactif
-            st.dataframe(
-                df_formations,
-                column_config={
-                    "formation": "Formation",
-                    "total_examens": "Total",
-                    "confirmes": "✅ Confirmés",
-                    "en_attente": "⏳ En attente",
-                    "refuses": "❌ Refusés"
-                },
-                hide_index=True
-            )
+            if cap_data:
+                df_cap = pd.DataFrame(cap_data)
+                st.dataframe(df_cap, hide_index=True)
+            else:
+                st.success("✅ Aucun problème de capacité détecté")
         
         cursor.close()
         conn.close()
         
     except Exception as e:
-        st.error(f"Erreur lors du chargement des statistiques: {str(e)}")
+        st.error(f"Erreur: {str(e)}")
 
-def update_exam_status(exam_id, new_status, user_id, commentaire=None):
-    """Mettre à jour le statut d'un examen"""
-    conn = get_connection()
-    if not conn:
-        return False
+def show_profile():
+    """Profil Chef de Département"""
+    st.header("👤 Mon Profil")
     
-    try:
-        cursor = conn.cursor()
-        
-        # Mettre à jour le statut de l'examen
-        cursor.execute("""
-            UPDATE examens 
-            SET statut = %s, 
-                last_modified = NOW(),
-                modified_by = %s
-            WHERE id = %s
-        """, (new_status, user_id, exam_id))
-        
-        conn.commit()
-        
-        # Ajouter un message dans la session si l'examen est refusé
-        if new_status == 'REFUSE':
-            st.session_state['admin_alert'] = {
-                'type': 'exam_refused',
-                'exam_id': exam_id,
-                'user_id': user_id,
-                'message': f"Un examen (ID: {exam_id}) a été refusé par le chef de département. Veuillez regénérer le planning.",
-            }
-        
-        # Enregistrer l'action dans planning_generations
-        cursor.execute("""
-            INSERT INTO planning_generations 
-            (generated_by, generation_date, exams_scheduled, parameters)
-            VALUES (%s, NOW(), 1, %s)
-        """, (user_id, f"Changement statut examen {exam_id} -> {new_status}. Commentaire: {commentaire or 'Aucun'}"))
-        
-        conn.commit()
-        
-        cursor.close()
-        conn.close()
-        return True
-        
-    except Exception as e:
-        print(f"Erreur lors de la mise à jour: {str(e)}")
-        return False
+    if 'user' not in st.session_state:
+        st.error("Non connecté")
+        return
+    
+    user = st.session_state.user
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.info(f"**Email:** {user.get('email', 'N/A')}")
+        st.info(f"**Rôle:** {user.get('role', 'N/A')}")
+        st.info(f"**ID:** {user.get('id', 'N/A')}")
+    
+    with col2:
+        st.info("**Permissions:**")
+        st.write("- ✅ Validation des examens du département")
+        st.write("- 📊 Statistiques départementales")
+        st.write("- ⚠️ Détection et gestion des conflits")
+        st.write("- 📋 Consultation des formations")
+
+if __name__ == "__main__":
+    show_chef_dashboard()

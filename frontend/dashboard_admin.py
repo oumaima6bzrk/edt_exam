@@ -98,11 +98,7 @@ def show_overview():
         if result and result['nb_refused'] > 0:
             st.error(f"🚨 {result['nb_refused']} examen(s) refusé(s) par le chef de département")
             
-            # Bouton pour voir les détails
-            if st.button("👀 Voir les examens refusés", key="view_refused_exams"):
-                st.session_state['show_refused_exams'] = True
-                st.rerun()
-            
+           
             st.divider()
     try:
         # Récupérer les données
@@ -162,7 +158,7 @@ def show_new_session():
         default_end = start_date + timedelta(days=10) if 'start_date' in locals() else datetime.now().date() + timedelta(days=17)
         end_date = st.date_input("Date de fin *", value=default_end)
         
-        st.info("ℹ️ La planification automatique s'occupera de répartir les examens sur cette période.")
+     
         
         submitted = st.form_submit_button("🚀 Créer et Planifier Automatiquement", type="primary")
         

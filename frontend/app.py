@@ -5,8 +5,9 @@ import os
 
 port = int(os.environ.get("PORT", 8501))
 # Ajouter le chemin du projet au PYTHONPATH
-project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, project_root)
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if BASE_DIR not in sys.path:
+    sys.path.append(BASE_DIR)
 
 # Configuration
 st.set_page_config(

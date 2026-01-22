@@ -1,4 +1,7 @@
-streamlit==1.28.0
-pandas>=2.1.4
-numpy>=1.24.3
+treamlit==1.52.2
+pandas==3.0.0 
+numpy==2.4.1 
+mysql-connector-python>=8.1.0
+python-dotenv==1.0.0
+psycopg2-binary==2.9.9
 mysql-connector-python>=8.1.0
